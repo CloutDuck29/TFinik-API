@@ -10,10 +10,16 @@ import re
 import pdfplumber
 import logging
 from collections import defaultdict
+from database import init_db
+from sqlmodel import Session
+from database import engine, Transaction as DBTransaction
+
+
 
 # отключаем варнинги
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 logging.getLogger("pdfplumber").setLevel(logging.ERROR)
+
 
 def parse_statement(pdf_path):
     """Чтение PDF и парсинг транзакций с поддержкой многострочных описаний и извлечением периода"""
@@ -65,10 +71,13 @@ def parse_statement(pdf_path):
                     break
                 desc += ' ' + lines[j]
                 j += 1
+            amount_value = clean(amt_op_raw)
             txs.append({'date': date_op,
-                        'time': time_op,
-                        'cost': clean(amt_op_raw),
-                        'description': desc.strip()})
+                'time': time_op,
+                'amount': amount_value,
+                'description': desc.strip(),
+                'isIncome': amount_value > 0})
+
             i = j
         else:
             i += 1
@@ -140,6 +149,10 @@ class TokenPair(BaseModel):
 
 app = FastAPI()
 
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
 def make_tokens(sub: str):
     now = datetime.utcnow()
     access = jwt.encode({"sub":sub, "exp":now+ACCESS_TTL}, SECRET, ALGO)
@@ -175,22 +188,18 @@ async def upload_statement(file: UploadFile = File(...)):
         start, end, txs = parse_statement(temp_path)
         categorized = categorize_by_place(txs)
 
-        # ✨ Переименовываем поля в соответствии с моделью Swift
-        converted = []
+        # Добавляем поле bank в каждую транзакцию
         for tx in categorized:
-            converted.append({
-                "date": tx["date"],
-                "description": tx["description"],
-                "amount": abs(tx["cost"]),  # мы сохраняем абсолютное значение
-                "isIncome": tx["cost"] > 0,
-                "category": tx["category"],
-                "bank": "Tinkoff"
-            })
+            tx["bank"] = "Tinkoff"  # Пока просто хардкодим, потом будет определяться
+            tx["isIncome"] = tx.get("isIncome", False)  # если вдруг потеряется
 
-        return {"period": {"start": start, "end": end}, "transactions": converted}
+
+        return {"period": {"start": start, "end": end}, "transactions": categorized}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         os.remove(temp_path)
+
+
 
 
