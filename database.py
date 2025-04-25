@@ -1,17 +1,17 @@
 from sqlmodel import SQLModel, Field, create_engine, Session
 from typing import Optional
-import datetime
+from datetime import datetime, timedelta
 
 
 class Transaction(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     date: str
-    time: Optional[str]
-    amount: float  # <-- было cost
+    time: str | None
+    cost: float  # <-- ВАЖНО
     description: str
     category: str
     bank: str
-    created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 # Настройка подключения к SQLite (пока локально)

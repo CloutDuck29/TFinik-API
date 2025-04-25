@@ -1,18 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel, EmailStr
 from passlib.hash import bcrypt
 from jose import jwt
 from datetime import datetime, timedelta
-from fastapi import UploadFile, File
 from fastapi.responses import JSONResponse
-import os
-import re
-import pdfplumber
-import logging
-from collections import defaultdict
-from database import init_db
 from sqlmodel import Session
-from database import engine, Transaction as DBTransaction
+from database import init_db, engine, Transaction as DBTransaction
+import os, re, pdfplumber, logging
+from collections import defaultdict
+import traceback
+from sqlmodel import SQLModel
 
 
 
@@ -21,34 +18,22 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 logging.getLogger("pdfplumber").setLevel(logging.ERROR)
 
 
+# --- ПАРСИНГ PDF ---
 def parse_statement(pdf_path):
-    """Чтение PDF и парсинг транзакций с поддержкой многострочных описаний и извлечением периода"""
     with pdfplumber.open(pdf_path) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
-    # Извлекаем период
     m = re.search(r'Движение средств за период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', text)
     start, end = m.groups() if m else (None, None)
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    pat1 = re.compile(
-        r'^(\d{2}\.\d{2}\.\d{4})\s+'            # дата операции
-        r'(\d{2}\.\d{2}\.\d{4})\s+'             # дата списания
-        r'([+\-][\d\s\.,]+)\s+₽\s+'             # сумма операции
-        r'([+\-][\d\s\.,]+)\s+₽\s+'             # сумма в валюте карты
-        r'(.+?)\s+'                             # часть описания 1
-        r'(\d{4})$'                             # последние 4 цифры карты
-    )
-    pat2 = re.compile(
-        r'^(\d{2}:\d{2})\s+'                    # время операции
-        r'(\d{2}:\d{2})\s+'                     # время списания
-        r'(.+)$'                                # часть описания 2
-    )
+    pat1 = re.compile(r'^(\d{2}\.\d{2}\.\d{4})\s+(\d{2}\.\d{2}\.\d{4})\s+([+\-][\d\s\.,]+)\s+₽\s+([+\-][\d\s\.,]+)\s+₽\s+(.+?)\s+(\d{4})$')
+    pat2 = re.compile(r'^(\d{2}:\d{2})\s+(\d{2}:\d{2})\s+(.+)$')
+
     footer_patterns = [
         re.compile(r'^АО «ТБанк', re.IGNORECASE),
         re.compile(r'^БИК', re.IGNORECASE),
         re.compile(r'^ИНН', re.IGNORECASE),
-        # новые маркеры конца выписки
         re.compile(r'^Пополнения[:\s]', re.IGNORECASE),
         re.compile(r'^Расходы[:\s]', re.IGNORECASE),
         re.compile(r'^Итого', re.IGNORECASE),
@@ -56,8 +41,8 @@ def parse_statement(pdf_path):
     ]
 
     txs = []
-    i = 0
     clean = lambda s: float(s.replace(" ", "").replace(",", "."))
+    i = 0
     while i < len(lines) - 1:
         m1 = pat1.match(lines[i])
         m2 = pat2.match(lines[i + 1])
@@ -72,20 +57,23 @@ def parse_statement(pdf_path):
                 desc += ' ' + lines[j]
                 j += 1
             amount_value = clean(amt_op_raw)
-            txs.append({'date': date_op,
+            txs.append({
+                'date': date_op,
                 'time': time_op,
                 'amount': amount_value,
                 'description': desc.strip(),
-                'isIncome': amount_value > 0})
-
+                'isIncome': amount_value > 0
+            })
             i = j
         else:
             i += 1
+
+    print(f"✅ Parsed {len(txs)} transactions")
     return start, end, txs
 
 
+# --- КАТЕГОРИЗАЦИЯ ---
 def categorize_by_place(txs):
-    """Категоризация транзакций по месту операции"""
     rules = {
         'Кофейни':            [r'кофе', r'кофейня', r'кофешоп', r'cafe', r'coffee',
                                r'шоколадница', r'кофемания', r'Coffeemania',
@@ -123,8 +111,8 @@ def categorize_by_place(txs):
         'ЖКХ/Коммуналка':     [r'zhku', r'жкх', r'kvartplata', r'квартплата', r'dsos', r'коммунал'],
         'Переводы':           [r'перевод'],
     }
-    regex = {cat: [re.compile(p, re.IGNORECASE) for p in pats]
-             for cat, pats in rules.items()}
+
+    regex = {cat: [re.compile(p, re.IGNORECASE) for p in pats] for cat, pats in rules.items()}
 
     for tx in txs:
         tx['category'] = 'Другие'
@@ -134,6 +122,8 @@ def categorize_by_place(txs):
                 break
     return txs
 
+
+# --- АВТОРИЗАЦИЯ ---
 SECRET, ALGO = "supersecretkey", "HS256"
 ACCESS_TTL = timedelta(minutes=30)
 users = {}
@@ -147,7 +137,11 @@ class TokenPair(BaseModel):
     refresh_token: str
     expires_in: int
 
+
+# --- FASTAPI ---
 app = FastAPI()
+def init_db():
+    SQLModel.metadata.create_all(engine)
 
 @app.on_event("startup")
 def on_startup():
@@ -155,8 +149,8 @@ def on_startup():
 
 def make_tokens(sub: str):
     now = datetime.utcnow()
-    access = jwt.encode({"sub":sub, "exp":now+ACCESS_TTL}, SECRET, ALGO)
-    refresh = jwt.encode({"sub":sub, "exp":now+ACCESS_TTL*2}, SECRET, ALGO)
+    access = jwt.encode({"sub": sub, "exp": now + ACCESS_TTL}, SECRET, ALGO)
+    refresh = jwt.encode({"sub": sub, "exp": now + ACCESS_TTL * 2}, SECRET, ALGO)
     return access, refresh
 
 @app.post("/auth/register", status_code=201)
@@ -164,7 +158,7 @@ def register(c: Creds):
     if c.email in users:
         raise HTTPException(400, "User exists")
     users[c.email] = bcrypt.hash(c.password)
-    return {"msg":"ok"}
+    return {"msg": "ok"}
 
 @app.post("/auth/login", response_model=TokenPair)
 def login(c: Creds):
@@ -172,12 +166,14 @@ def login(c: Creds):
     if not h or not bcrypt.verify(c.password, h):
         raise HTTPException(401, "Invalid credentials")
     a, r = make_tokens(c.email)
-    return {"access_token":a, "refresh_token":r, "expires_in":int(ACCESS_TTL.total_seconds())}
+    return {"access_token": a, "refresh_token": r, "expires_in": int(ACCESS_TTL.total_seconds())}
 
+
+# --- ЗАГРУЗКА PDF ---
 @app.post("/transactions/upload")
 async def upload_statement(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+        raise HTTPException(400, detail="Only PDF files are supported.")
 
     contents = await file.read()
     temp_path = f"/tmp/{file.filename}"
@@ -187,19 +183,50 @@ async def upload_statement(file: UploadFile = File(...)):
     try:
         start, end, txs = parse_statement(temp_path)
         categorized = categorize_by_place(txs)
+        response_transactions = []
 
-        # Добавляем поле bank в каждую транзакцию
         for tx in categorized:
-            tx["bank"] = "Tinkoff"  # Пока просто хардкодим, потом будет определяться
-            tx["isIncome"] = tx.get("isIncome", False)  # если вдруг потеряется
+            tx["bank"] = "Tinkoff"
+            print(">> TX TO DB:", tx)
+            tx["cost"] = tx["amount"]  # добавляем нужное поле  # Добавь вот эту строку
+            db_tx = DBTransaction(
+                date=tx["date"],
+                time=tx.get("time"),
+                cost=tx["cost"],  # теперь правильно
+                description=tx["description"],
+                category=tx["category"],
+                bank=tx["bank"]
+            )           
 
+            with Session(engine) as session:
+                session.add(db_tx)
+                session.commit()
 
-        return {"period": {"start": start, "end": end}, "transactions": categorized}
+            response_transactions.append({
+                "date": tx["date"],
+                "time": tx.get("time"),
+                "amount": tx["amount"],
+                "isIncome": tx["isIncome"],
+                "description": tx["description"],
+                "category": tx["category"],
+                "bank": tx["bank"]
+            })
+
+        if not response_transactions:
+            print("⚠️ Нет транзакций, возвращаем пустой список")
+            return {
+                "period": {"start": start, "end": end},
+                "transactions": []
+            }
+
+        return {
+            "period": {"start": start, "end": end},
+            "transactions": response_transactions
+        }
+
     except Exception as e:
+        print("❌ Exception occurred:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         os.remove(temp_path)
-
-
-
-
