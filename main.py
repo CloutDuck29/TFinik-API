@@ -10,6 +10,12 @@ import os, re, pdfplumber, logging
 from collections import defaultdict
 import traceback
 from sqlmodel import SQLModel
+from fastapi import Depends, Header
+from jose import jwt
+from fastapi.openapi.models import APIKey, APIKeyIn, SecuritySchemeType, SecurityScheme
+from fastapi.openapi.utils import get_openapi
+from fastapi.security import HTTPBearer
+from fastapi import Request
 
 
 
@@ -137,6 +143,7 @@ class TokenPair(BaseModel):
     refresh_token: str
     expires_in: int
 
+security = HTTPBearer()
 
 # --- FASTAPI ---
 app = FastAPI()
@@ -168,12 +175,45 @@ def login(c: Creds):
     a, r = make_tokens(c.email)
     return {"access_token": a, "refresh_token": r, "expires_in": int(ACCESS_TTL.total_seconds())}
 
+# добавь вот эту функцию
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="TFinik API",
+        version="1.0.0",
+        description="API для загрузки и анализа банковских транзакций",
+        routes=app.routes,
+    )
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+    }
+    for path in openapi_schema["paths"].values():
+        for method in path.values():
+            method.setdefault("security", [{"BearerAuth": []}])
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 # --- ЗАГРУЗКА PDF ---
 @app.post("/transactions/upload")
-async def upload_statement(file: UploadFile = File(...)):
+async def upload_statement(request: Request, file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(400, detail="Only PDF files are supported.")
+
+    # 👉 Получаем заголовок Authorization из запроса
+    authorization = request.headers.get("authorization")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="Authorization header missing or invalid")
+
+    token = authorization.split(" ")[1]  # достаем сам токен из "Bearer <token>"
+    payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+    user_email = payload["sub"]
 
     contents = await file.read()
     temp_path = f"/tmp/{file.filename}"
@@ -188,15 +228,16 @@ async def upload_statement(file: UploadFile = File(...)):
         for tx in categorized:
             tx["bank"] = "Tinkoff"
             print(">> TX TO DB:", tx)
-            tx["cost"] = tx["amount"]  # добавляем нужное поле  # Добавь вот эту строку
+            tx["cost"] = tx["amount"]  # добавляем нужное поле
             db_tx = DBTransaction(
                 date=tx["date"],
                 time=tx.get("time"),
-                cost=tx["cost"],  # теперь правильно
+                cost=tx["cost"],
                 description=tx["description"],
                 category=tx["category"],
-                bank=tx["bank"]
-            )           
+                bank=tx["bank"],
+                user_email=user_email  # Привязка к пользователю
+            )
 
             with Session(engine) as session:
                 session.add(db_tx)

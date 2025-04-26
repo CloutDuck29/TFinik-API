@@ -7,11 +7,12 @@ class Transaction(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     date: str
     time: str | None
-    cost: float  # <-- ВАЖНО
+    cost: float
     description: str
     category: str
     bank: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    user_email: str  # <- новый атрибут для БД (чтобы не было шизы)
 
 
 # Настройка подключения к SQLite (пока локально)
