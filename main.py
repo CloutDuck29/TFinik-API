@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel, EmailStr
 from passlib.hash import bcrypt
-from jose import jwt
 from datetime import datetime, timedelta
 from fastapi.responses import JSONResponse
 from sqlmodel import Session
@@ -16,7 +15,8 @@ from fastapi.openapi.models import APIKey, APIKeyIn, SecuritySchemeType, Securit
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
 from fastapi import Request
-
+from database import User as DBUser
+from sqlmodel import select
 
 
 # отключаем варнинги
@@ -162,18 +162,24 @@ def make_tokens(sub: str):
 
 @app.post("/auth/register", status_code=201)
 def register(c: Creds):
-    if c.email in users:
-        raise HTTPException(400, "User exists")
-    users[c.email] = bcrypt.hash(c.password)
+    with Session(engine) as session:
+        existing = session.exec(select(DBUser).where(DBUser.email == c.email)).first()
+        if existing:
+            raise HTTPException(400, "User exists")
+        new_user = DBUser(email=c.email, hashed_password=bcrypt.hash(c.password))
+        session.add(new_user)
+        session.commit()
     return {"msg": "ok"}
+
 
 @app.post("/auth/login", response_model=TokenPair)
 def login(c: Creds):
-    h = users.get(c.email)
-    if not h or not bcrypt.verify(c.password, h):
-        raise HTTPException(401, "Invalid credentials")
-    a, r = make_tokens(c.email)
-    return {"access_token": a, "refresh_token": r, "expires_in": int(ACCESS_TTL.total_seconds())}
+    with Session(engine) as session:
+        user = session.exec(select(DBUser).where(DBUser.email == c.email)).first()
+        if not user or not bcrypt.verify(c.password, user.hashed_password):
+            raise HTTPException(401, "Invalid credentials")
+        a, r = make_tokens(user.email)
+        return {"access_token": a, "refresh_token": r, "expires_in": int(ACCESS_TTL.total_seconds())}
 
 # добавь вот эту функцию
 def custom_openapi():
@@ -200,9 +206,27 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+@app.get("/transactions")
+async def get_transactions(authorization: str = Header(...)):
+    token = authorization.split(" ")[1]
+    payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+    user_email = payload["sub"]
+
+    with Session(engine) as session:
+        transactions = session.exec(
+            select(DBTransaction).where(DBTransaction.user_email == user_email)
+        ).all()
+
+    return transactions
+
+
 # --- ЗАГРУЗКА PDF ---
 @app.post("/transactions/upload")
 async def upload_statement(request: Request, file: UploadFile = File(...)):
+    print("upload_statement called")
+    print("Request headers:", request.headers)
+    print("Uploaded file:", file.filename)
+
     if not file.filename.endswith('.pdf'):
         raise HTTPException(400, detail="Only PDF files are supported.")
 
@@ -211,10 +235,15 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, detail="Authorization header missing or invalid")
 
-    token = authorization.split(" ")[1]  # достаем сам токен из "Bearer <token>"
-    payload = jwt.decode(token, SECRET, algorithms=[ALGO])
-    user_email = payload["sub"]
+    try:
+        token = authorization.split(" ")[1]
 
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        user_email = payload["sub"]
+    except Exception as e:
+        print("JWT decode failed:", str(e))
+        raise HTTPException(401, "Invalid or expired token")
+        
     contents = await file.read()
     temp_path = f"/tmp/{file.filename}"
     with open(temp_path, 'wb') as f:

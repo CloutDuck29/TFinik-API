@@ -3,6 +3,11 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str
+    hashed_password: str
+
 class Transaction(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     date: str
@@ -13,7 +18,6 @@ class Transaction(SQLModel, table=True):
     bank: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
     user_email: str  # <- новый атрибут для БД (чтобы не было шизы)
-
 
 # Настройка подключения к SQLite (пока локально)
 DATABASE_URL = "sqlite:///./transactions.db"
