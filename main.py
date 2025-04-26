@@ -11,6 +11,7 @@ import traceback
 from sqlmodel import SQLModel
 from fastapi import Depends, Header
 from jose import jwt
+from fastapi import Path
 from fastapi.openapi.models import APIKey, APIKeyIn, SecuritySchemeType, SecurityScheme
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
@@ -220,7 +221,6 @@ async def get_transactions(authorization: str = Header(...)):
     return transactions
 
 
-# --- ЗАГРУЗКА PDF ---
 @app.post("/transactions/upload")
 async def upload_statement(request: Request, file: UploadFile = File(...)):
     print("upload_statement called")
@@ -230,20 +230,18 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(400, detail="Only PDF files are supported.")
 
-    # 👉 Получаем заголовок Authorization из запроса
     authorization = request.headers.get("authorization")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, detail="Authorization header missing or invalid")
 
     try:
         token = authorization.split(" ")[1]
-
         payload = jwt.decode(token, SECRET, algorithms=[ALGO])
         user_email = payload["sub"]
     except Exception as e:
         print("JWT decode failed:", str(e))
         raise HTTPException(401, "Invalid or expired token")
-        
+
     contents = await file.read()
     temp_path = f"/tmp/{file.filename}"
     with open(temp_path, 'wb') as f:
@@ -252,42 +250,40 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
     try:
         start, end, txs = parse_statement(temp_path)
         categorized = categorize_by_place(txs)
-        response_transactions = []
 
-        for tx in categorized:
-            tx["bank"] = "Tinkoff"
-            print(">> TX TO DB:", tx)
-            tx["cost"] = tx["amount"]  # добавляем нужное поле
-            db_tx = DBTransaction(
-                date=tx["date"],
-                time=tx.get("time"),
-                cost=tx["cost"],
-                description=tx["description"],
-                category=tx["category"],
-                bank=tx["bank"],
-                user_email=user_email  # Привязка к пользователю
-            )
+        with Session(engine) as session:
+            db_transactions = []
 
-            with Session(engine) as session:
+            for tx in categorized:
+                tx["bank"] = "Tinkoff"
+                tx["cost"] = tx["amount"]
+
+                db_tx = DBTransaction(
+                    date=tx["date"],
+                    time=tx.get("time"),
+                    cost=tx["cost"],
+                    description=tx["description"],
+                    category=tx["category"],
+                    bank=tx["bank"],
+                    user_email=user_email
+                )
                 session.add(db_tx)
-                session.commit()
+                db_transactions.append(db_tx)
 
-            response_transactions.append({
-                "date": tx["date"],
-                "time": tx.get("time"),
-                "amount": tx["amount"],
-                "isIncome": tx["isIncome"],
-                "description": tx["description"],
-                "category": tx["category"],
-                "bank": tx["bank"]
-            })
+            session.commit()  # ✅ Коммитим всё ДО выхода из with
 
-        if not response_transactions:
-            print("⚠️ Нет транзакций, возвращаем пустой список")
-            return {
-                "period": {"start": start, "end": end},
-                "transactions": []
-            }
+            response_transactions = []
+            for db_tx in db_transactions:
+                response_transactions.append({
+                    "id": db_tx.id,
+                    "date": db_tx.date,
+                    "time": db_tx.time,
+                    "amount": db_tx.cost,
+                    "isIncome": db_tx.cost > 0,
+                    "description": db_tx.description,
+                    "category": db_tx.category,
+                    "bank": db_tx.bank
+                })
 
         return {
             "period": {"start": start, "end": end},
@@ -300,3 +296,32 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         os.remove(temp_path)
+
+
+@app.patch("/transactions/{transaction_id}")
+async def update_transaction_category(
+    transaction_id: int,
+    category_update: dict,
+    authorization: str = Header(...)
+):
+    token = authorization.split(" ")[1]
+    payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+    user_email = payload["sub"]
+
+    new_category = category_update.get("category")
+    if not new_category:
+        raise HTTPException(400, "Category required")
+
+    with Session(engine) as session:
+        transaction = session.get(DBTransaction, transaction_id)
+        if not transaction:
+            raise HTTPException(404, "Transaction not found")
+
+        if transaction.user_email != user_email:
+            raise HTTPException(403, "Forbidden")
+
+        transaction.category = new_category
+        session.add(transaction)
+        session.commit()
+
+    return {"msg": "Category updated"}
