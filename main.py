@@ -18,6 +18,7 @@ from fastapi.security import HTTPBearer
 from fastapi import Request
 from database import User as DBUser
 from sqlmodel import select
+from collections import defaultdict
 
 
 # отключаем варнинги
@@ -296,6 +297,55 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         os.remove(temp_path)
+
+
+@app.get("/analytics/categories")
+async def get_analytics(authorization: str = Header(...)):
+    token = authorization.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        user_email = payload["sub"]
+    except Exception as e:
+        raise HTTPException(401, "Invalid or expired token")
+
+    with Session(engine) as session:
+        transactions = session.exec(
+            select(DBTransaction).where(DBTransaction.user_email == user_email)
+        ).all()
+
+    if not transactions:
+        return {
+            "totalSpent": 0,
+            "period": {"start": None, "end": None},
+            "categories": []
+        }
+
+    expenses = defaultdict(float)
+    total_spent = 0.0
+    dates = []
+
+    for tx in transactions:
+        if tx.category == "Пополнение" or tx.cost > 0:
+            continue  # пропускаем пополнения и доходы
+        expenses[tx.category] += abs(tx.cost)
+        total_spent += abs(tx.cost)
+        dates.append(datetime.strptime(tx.date, "%d.%m.%Y"))
+
+    period = {
+        "start": min(dates).strftime("%d.%m.%Y") if dates else None,
+        "end": max(dates).strftime("%d.%m.%Y") if dates else None
+    }
+
+    categories_list = [
+        {"category": name, "amount": round(amount, 2)}
+        for name, amount in expenses.items()
+    ]
+
+    return {
+        "totalSpent": round(total_spent, 2),
+        "period": period,
+        "categories": categories_list
+    }
 
 
 @app.patch("/transactions/{transaction_id}")
