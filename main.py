@@ -159,7 +159,7 @@ def on_startup():
 def make_tokens(sub: str):
     now = datetime.utcnow()
     access = jwt.encode({"sub": sub, "exp": now + ACCESS_TTL}, SECRET, ALGO)
-    refresh = jwt.encode({"sub": sub, "exp": now + ACCESS_TTL * 2}, SECRET, ALGO)
+    refresh = jwt.encode({"sub": sub, "exp": now + timedelta(days=30)}, SECRET, ALGO)
     return access, refresh
 
 @app.post("/auth/register", status_code=201)
@@ -346,6 +346,18 @@ async def get_analytics(authorization: str = Header(...)):
         "period": period,
         "categories": categories_list
     }
+
+
+@app.post("/auth/refresh", response_model=TokenPair)
+def refresh_tokens(refresh_token: str):
+    try:
+        payload = jwt.decode(refresh_token, SECRET, algorithms=[ALGO])
+        user_email = payload["sub"]
+    except Exception:
+        raise HTTPException(401, "Invalid or expired refresh token")
+
+    a, r = make_tokens(user_email)
+    return {"access_token": a, "refresh_token": r, "expires_in": int(ACCESS_TTL.total_seconds())}
 
 
 @app.patch("/transactions/{transaction_id}")
