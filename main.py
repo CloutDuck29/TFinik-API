@@ -133,7 +133,7 @@ def categorize_by_place(txs):
 
 # --- АВТОРИЗАЦИЯ ---
 SECRET, ALGO = "supersecretkey", "HS256"
-ACCESS_TTL = timedelta(minutes=30)
+ACCESS_TTL = timedelta(days=30)
 users = {}
 
 class Creds(BaseModel):
