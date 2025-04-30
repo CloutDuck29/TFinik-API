@@ -17,7 +17,9 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
 from fastapi import Request
 from database import User as DBUser
+from fastapi import Form
 from sqlmodel import select
+from database import Statement as DBStatement
 from collections import defaultdict
 
 
@@ -26,7 +28,7 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 logging.getLogger("pdfplumber").setLevel(logging.ERROR)
 
 
-# --- ПАРСИНГ PDF ---
+# --- ПАРСИН PDF ---
 def parse_statement(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
@@ -43,7 +45,7 @@ def parse_statement(pdf_path):
         re.compile(r'^БИК', re.IGNORECASE),
         re.compile(r'^ИНН', re.IGNORECASE),
         re.compile(r'^Пополнения[:\s]', re.IGNORECASE),
-        re.compile(r'^Расходы[:\s]', re.IGNORECASE),
+        re.compile(r'^Расход[:\s]', re.IGNORECASE),
         re.compile(r'^Итого', re.IGNORECASE),
         re.compile(r'^С уважением', re.IGNORECASE),
     ]
@@ -223,10 +225,14 @@ async def get_transactions(authorization: str = Header(...)):
 
 
 @app.post("/transactions/upload")
-async def upload_statement(request: Request, file: UploadFile = File(...)):
+async def upload_statement(
+    request: Request,
+    file: UploadFile = File(...),
+    bank: str = Form(...)
+):
     print("upload_statement called")
-    print("Request headers:", request.headers)
     print("Uploaded file:", file.filename)
+    print("Selected bank:", bank)
 
     if not file.filename.endswith('.pdf'):
         raise HTTPException(400, detail="Only PDF files are supported.")
@@ -253,10 +259,20 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
         categorized = categorize_by_place(txs)
 
         with Session(engine) as session:
-            db_transactions = []
+            # ⬇ используем переданный банк
+            statement = DBStatement(
+                user_email=user_email,
+                bank=bank,
+                date_start=datetime.strptime(start, "%d.%m.%Y").date(),
+                date_end=datetime.strptime(end, "%d.%m.%Y").date()
+            )
+            session.add(statement)
+            session.commit()
+            session.refresh(statement)
 
+            db_transactions = []
             for tx in categorized:
-                tx["bank"] = "Tinkoff"
+                tx["bank"] = bank
                 tx["cost"] = tx["amount"]
 
                 db_tx = DBTransaction(
@@ -266,12 +282,13 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
                     description=tx["description"],
                     category=tx["category"],
                     bank=tx["bank"],
-                    user_email=user_email
+                    user_email=user_email,
+                    statement_id=statement.id
                 )
                 session.add(db_tx)
                 db_transactions.append(db_tx)
 
-            session.commit()  # ✅ Коммитим всё ДО выхода из with
+            session.commit()
 
             response_transactions = []
             for db_tx in db_transactions:
@@ -346,6 +363,29 @@ async def get_analytics(authorization: str = Header(...)):
         "period": period,
         "categories": categories_list
     }
+
+
+@app.get("/statements")
+def get_statements(authorization: str = Header(...)):
+    token = authorization.split(" ")[1]
+    payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+    user_email = payload["sub"]
+
+    with Session(engine) as session:
+        statements = session.exec(
+            select(DBStatement).where(DBStatement.user_email == user_email)
+        ).all()
+
+    return [
+        {
+            "id": s.id,
+            "bank": s.bank,
+            "date_start": s.date_start.strftime("%d.%m.%Y"),
+            "date_end": s.date_end.strftime("%d.%m.%Y"),
+            "uploaded_at": s.uploaded_at.isoformat()
+        }
+        for s in statements
+    ]
 
 
 @app.post("/auth/refresh", response_model=TokenPair)
