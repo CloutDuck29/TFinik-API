@@ -260,11 +260,28 @@ async def upload_statement(
 
         with Session(engine) as session:
             # ⬇ используем переданный банк
+            start_date = datetime.strptime(start, "%d.%m.%Y").date()
+            end_date = datetime.strptime(end, "%d.%m.%Y").date()
+
+            # Проверяем, есть ли уже такая выписка
+            existing_statement = session.exec(
+                select(DBStatement).where(
+                    (DBStatement.user_email == user_email) &
+                    (DBStatement.bank == bank) &
+                    (DBStatement.date_start == start_date) &
+                    (DBStatement.date_end == end_date)
+                )
+            ).first()
+
+            if existing_statement:
+                raise HTTPException(status_code=400, detail="Такая выписка уже загружена.")
+
+            # Создаём новую, если такой не было
             statement = DBStatement(
                 user_email=user_email,
                 bank=bank,
-                date_start=datetime.strptime(start, "%d.%m.%Y").date(),
-                date_end=datetime.strptime(end, "%d.%m.%Y").date()
+                date_start=start_date,
+                date_end=end_date
             )
             session.add(statement)
             session.commit()
@@ -308,6 +325,8 @@ async def upload_statement(
             "transactions": response_transactions
         }
 
+    except HTTPException as http_exc:
+        raise http_exc  # пробрасываем как есть, чтобы клиент получил 400
     except Exception as e:
         print("❌ Exception occurred:")
         traceback.print_exc()
@@ -341,12 +360,25 @@ async def get_analytics(authorization: str = Header(...)):
     total_spent = 0.0
     dates = []
 
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=30)
+
     for tx in transactions:
+        try:
+            tx_date = datetime.strptime(tx.date, "%d.%m.%Y")
+        except ValueError:
+            continue  # Пропускаем некорректные даты
+
+        if tx_date < cutoff:
+            continue  # Пропускаем транзакции старше 30 дней
+
         if tx.category == "Пополнение" or tx.cost > 0:
-            continue  # пропускаем пополнения и доходы
+            continue  # Пропускаем пополнения и доходы
+
         expenses[tx.category] += abs(tx.cost)
         total_spent += abs(tx.cost)
-        dates.append(datetime.strptime(tx.date, "%d.%m.%Y"))
+        dates.append(tx_date)
+
 
     period = {
         "start": min(dates).strftime("%d.%m.%Y") if dates else None,
