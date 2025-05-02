@@ -22,6 +22,7 @@ from sqlmodel import select
 from database import Statement as DBStatement
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
+from collections import defaultdict, OrderedDict
 
 # отключаем варнинги
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -334,6 +335,75 @@ async def upload_statement(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         os.remove(temp_path)
+
+@app.get("/analytics/income")
+def get_monthly_income(authorization: str = Header(...)):
+    token = authorization.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        user_email = payload["sub"]
+    except Exception:
+        raise HTTPException(401, "Invalid or expired token")
+
+    MONTHS_RU = {
+        1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр", 5: "Май", 6: "Июн",
+        7: "Июл", 8: "Авг", 9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек"
+    }
+
+    now = datetime.utcnow()
+    current_year = now.year
+    current_month = now.month
+
+    if current_month <= 6:
+        month_range = range(1, 7)  # Январь–Июнь
+    else:
+        month_range = range(7, 13)  # Июль–Декабрь
+
+    start_cutoff = datetime(current_year, month_range.start, 1)
+    end_cutoff = datetime(current_year, month_range.stop - 1, 28) + relativedelta(day=31)
+
+    with Session(engine) as session:
+        transactions = session.exec(
+            select(DBTransaction).where(DBTransaction.user_email == user_email)
+        ).all()
+
+    # Группировка по месяцам и категориям
+    monthly_data = defaultdict(lambda: defaultdict(list))  # {month_number: {category: [tx_dict]}}
+
+    for tx in transactions:
+        try:
+            tx_date = datetime.strptime(tx.date, "%d.%m.%Y")
+        except:
+            continue
+
+        if tx_date < start_cutoff or tx_date > end_cutoff:
+            continue
+
+        if tx.cost <= 0 or tx.category != "Пополнение":
+            continue
+
+        month = tx_date.month
+        monthly_data[month][tx.category].append({
+            "amount": round(tx.cost, 2),
+            "description": tx.description
+        })
+
+    # Формируем результат в правильном порядке
+    result = []
+    for month_num in month_range:
+        if month_num in monthly_data:
+            month_label = MONTHS_RU[month_num]
+            for cat, tx_list in monthly_data[month_num].items():
+                for tx in tx_list:
+                    result.append({
+                        "month": month_label,
+                        "category": cat,
+                        "amount": tx["amount"],
+                        "description": tx["description"]
+                    })
+
+    return result
+
 
 
 @app.get("/analytics/categories")
