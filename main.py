@@ -21,7 +21,7 @@ from fastapi import Form
 from sqlmodel import select
 from database import Statement as DBStatement
 from collections import defaultdict
-
+from dateutil.relativedelta import relativedelta
 
 # отключаем варнинги
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -110,9 +110,10 @@ def categorize_by_place(txs):
                                 r'dns[-\s]?shop', r'\bdns\b',
                                 r'citilink', r'ситилинк',
                                 r'leroy[\s\-]?merlin', r'леруа',
-                                r'\bobi\b', r'оби'],
+                                r'\bobi\b', r'оби',
+                                r'trial', r'sport'],
 
-        'Транспорт':          ['metro', 'omka', 'омка'],
+        'Транспорт':          ['metro', 'omka', 'омка', 'Transport'],
         'Доставка/Еда':       [r'yandex', r'яндекс', r'eda', r'еда', r'samokat', r'самокат',
                                r'delivery', r'доставка', r'uber', r'ubereats', r'food',
                                r'доставк[ae]', r'деливери'],
@@ -430,6 +431,83 @@ def refresh_tokens(refresh_token: str):
 
     a, r = make_tokens(user_email)
     return {"access_token": a, "refresh_token": r, "expires_in": int(ACCESS_TTL.total_seconds())}
+
+
+@app.get("/analytics/monthly")
+def get_monthly_analytics(authorization: str = Header(...)):
+    token = authorization.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        user_email = payload["sub"]
+    except Exception:
+        raise HTTPException(401, "Invalid or expired token")
+
+    MONTHS_RU = {
+        1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр", 5: "Май", 6: "Июн",
+        7: "Июл", 8: "Авг", 9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек"
+    }
+
+    now = datetime.utcnow()
+    current_year = now.year
+    current_month = now.month
+
+    if current_month <= 6:
+        start_month = 1
+        end_month = current_month
+    else:
+        start_month = current_month
+        end_month = 12
+
+    start_cutoff = datetime(current_year, start_month, 1)
+    end_cutoff = datetime(current_year, end_month, 28) + relativedelta(day=31)
+
+    with Session(engine) as session:
+        transactions = session.exec(
+            select(DBTransaction).where(DBTransaction.user_email == user_email)
+        ).all()
+
+    monthly_data = defaultdict(lambda: defaultdict(list))  # {month_number: {category: [tx_dicts]}}
+
+    for tx in transactions:
+        try:
+            tx_date = datetime.strptime(tx.date, "%d.%m.%Y")
+        except:
+            continue
+
+        if tx_date < start_cutoff or tx_date > end_cutoff:
+            continue
+
+        if tx.cost > 0 or tx.category == "Пополнение":
+            continue
+
+        month_number = tx_date.month
+        monthly_data[month_number][tx.category].append({
+            "amount": abs(tx.cost),
+            "description": tx.description
+        })
+
+    result = []
+    for month_number in range(start_month, end_month + 1):
+        if month_number in monthly_data:
+            month_label = MONTHS_RU[month_number]
+            for cat, tx_list in monthly_data[month_number].items():
+                if cat == "Другие":
+                    for tx in tx_list:
+                        result.append({
+                            "month": month_label,
+                            "category": cat,
+                            "amount": round(tx["amount"], 2),
+                            "description": tx["description"]
+                        })
+                else:
+                    total = sum(tx["amount"] for tx in tx_list)
+                    result.append({
+                        "month": month_label,
+                        "category": cat,
+                        "amount": round(total, 2)
+                    })
+
+    return result
 
 
 @app.patch("/transactions/{transaction_id}")
