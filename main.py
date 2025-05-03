@@ -23,6 +23,11 @@ from database import Statement as DBStatement
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
 from collections import defaultdict, OrderedDict
+from datetime import date, timedelta
+from calendar import monthrange
+import random
+
+
 
 # отключаем варнинги
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -115,12 +120,12 @@ def categorize_by_place(txs):
                                 r'trial', r'sport'],
 
         'Транспорт':          ['metro', 'omka', 'омка', 'Transport'],
-        'Доставка/Еда':       [r'yandex', r'яндекс', r'eda', r'еда', r'samokat', r'самокат',
+        'Доставка':       [r'yandex', r'яндекс', r'eda', r'еда', r'samokat', r'самокат',
                                r'delivery', r'доставка', r'uber', r'ubereats', r'food',
                                r'доставк[ae]', r'деливери'],
         'Развлечения':        [r'ivi', r'okko', r'kinopoisk', r'netflix', r'кинопоиск'],
         'Пополнение':         [r'пополнение', r'внесение наличных', r'cashback', r'кэшбэк'],
-        'ЖКХ/Коммуналка':     [r'zhku', r'жкх', r'kvartplata', r'квартплата', r'dsos', r'коммунал'],
+        'ЖКХ':     [r'zhku', r'жкх', r'kvartplata', r'квартплата', r'dsos', r'коммунал'],
         'Переводы':           [r'перевод'],
     }
 
@@ -467,6 +472,103 @@ async def get_analytics(authorization: str = Header(...)):
         "categories": categories_list
     }
 
+@app.get("/advice/monthly")
+def monthly_advice(authorization: str = Header(...)):
+    try:
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        user_email = payload["sub"]
+    except Exception:
+        raise HTTPException(401, "Invalid or expired token")
+
+    # Фиксированный период: апрель и март 2025
+    first_this_month = date(2025, 4, 1)
+    today = date(2025, 4, 30)
+    first_last_month = date(2025, 3, 1)
+    last_last_month = date(2025, 3, 31)
+
+    EMOJI_BY_CATEGORY = {
+        "Кофейни": "☕️",
+        "Магазины": "🛍️",
+        "ЖКХ": "💡",
+        "Развлечения": "🎬",
+        "Доставка": "🍔",
+        "Транспорт": "🚌",
+        "Другие": "📊"
+    }
+
+    with Session(engine) as session:
+        txs = session.exec(
+            select(DBTransaction)
+            .where(DBTransaction.user_email == user_email)
+            .where(DBTransaction.cost < 0)
+        ).all()
+
+    # Группировка трат
+    sums = {
+        'this': defaultdict(float),
+        'last': defaultdict(float),
+    }
+    total_this = 0
+
+    for tx in txs:
+        try:
+            tx_date = datetime.strptime(tx.date, "%d.%m.%Y").date()
+        except ValueError:
+            continue
+
+        period = None
+        if first_this_month <= tx_date <= today:
+            period = 'this'
+        elif first_last_month <= tx_date <= last_last_month:
+            period = 'last'
+
+        if not period:
+            continue
+
+        category = tx.category or "Другие"
+        amount = abs(tx.cost)
+
+        sums[period][category] += amount
+        if period == 'this':
+            total_this += amount
+
+    # Генерация советов
+    advice_list = []
+    for cat in set(sums['this']) | set(sums['last']):
+        if cat in {"Переводы", "Пополнение"}:
+            continue
+
+        amt_this = sums['this'].get(cat, 0)
+        amt_last = sums['last'].get(cat, 0)
+
+        if amt_this == 0:
+            continue
+
+        change_pct = ((amt_this - amt_last) / amt_last * 100) if amt_last > 0 else 100
+        share_pct = amt_this / total_this * 100 if total_this > 0 else 0
+
+        if change_pct > 25 or share_pct > 30:
+            phrases = [
+                f"Это {share_pct:.0f}% всех расходов — подумайте, нужно ли это.",
+                f"Категория заняла {share_pct:.0f}% от всего — может, стоит сократить?",
+                f"На это ушло {share_pct:.0f}% от всех трат — подумайте о приоритетах.",
+                f"Целых {share_pct:.0f}% расходов! Возможно, стоит пересмотреть это."
+            ]
+            emoji = EMOJI_BY_CATEGORY.get(cat, "💸")
+            advice_text = (
+                f"{emoji} Вы тратите на '{cat}' на {change_pct:.0f}% больше, чем в прошлом месяце. "
+                + random.choice(phrases)
+            )
+            advice_list.append({
+                "category": cat,
+                "change_percent": round(change_pct, 1),
+                "share_percent": round(share_pct, 1),
+                "advice": advice_text
+            })
+
+    advice_list.sort(key=lambda x: x["share_percent"], reverse=True)
+    return advice_list
 
 @app.get("/statements")
 def get_statements(authorization: str = Header(...)):
