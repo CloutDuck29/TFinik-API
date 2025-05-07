@@ -29,7 +29,7 @@ import random
 import numpy as np
 from sklearn.cluster import KMeans
 from collections import defaultdict, Counter
-
+from fastapi import Query
 
 
 
@@ -587,16 +587,17 @@ MOOD_BY_CATEGORY = {
 
 PORTRAIT_BLACKLIST = {'Переводы'}
 
-def portrait_of_month(transactions):
-    today = date.today()
-    first_day = today.replace(day=1)
+def portrait_of_month(transactions, month: int, year: int):
+    first_day = date(year, month, 1)
+    last_day = first_day.replace(day=monthrange(year, month)[1])
+
     months = ["январь", "февраль", "март", "апрель", "май", "июнь",
               "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
-    month_name = months[today.month - 1].capitalize()
+    month_name = months[month - 1].capitalize()
 
     month_txs = [
         tx for tx in transactions
-        if datetime.strptime(tx.date, "%d.%m.%Y").date() >= first_day
+        if first_day <= datetime.strptime(tx.date, "%d.%m.%Y").date() <= last_day
         and tx.cost < 0
         and tx.category not in PORTRAIT_BLACKLIST
     ]
@@ -624,7 +625,7 @@ def portrait_of_month(transactions):
 
     return {
         "month": month_name,
-        "year": today.year,
+        "year": year,
         "status": "ok",
         "balanced": is_balanced,
         "top_categories": top3,
@@ -634,9 +635,11 @@ def portrait_of_month(transactions):
                    f"Топ категории: {', '.join(top3)}. Настроение: {mood}."
     }
 
-def cluster_days(transactions):
-    today = date.today()
-    first_day = today.replace(day=1)
+
+
+def cluster_days(transactions, month: int, year: int):
+    first_day = date(year, month, 1)
+    last_day = (first_day.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
     daily = defaultdict(float)
 
     for tx in transactions:
@@ -644,7 +647,7 @@ def cluster_days(transactions):
             tx_date = datetime.strptime(tx.date, "%d.%m.%Y").date()
         except:
             continue
-        if first_day <= tx_date <= today and tx.cost < 0:
+        if first_day <= tx_date <= last_day and tx.cost < 0:
             daily[tx_date] += abs(tx.cost)
 
     if not daily:
@@ -683,7 +686,11 @@ def cluster_days(transactions):
     return result
 
 @app.get("/portrait")
-def get_month_portrait(authorization: str = Header(...)):
+def get_month_portrait(
+    authorization: str = Header(...),
+    month: int = Query(None, ge=1, le=12),
+    year: int = Query(None, ge=2000, le=2100)
+):
     try:
         token = authorization.split(" ")[1]
         payload = jwt.decode(token, SECRET, algorithms=[ALGO])
@@ -691,18 +698,27 @@ def get_month_portrait(authorization: str = Header(...)):
     except Exception:
         raise HTTPException(401, "Invalid or expired token")
 
+    # Если параметры не переданы — используем текущий месяц и год
+    if month is None or year is None:
+        today = date.today()
+        month = today.month
+        year = today.year
+
+    # Получаем все транзакции пользователя
     with Session(engine) as session:
         transactions = session.exec(
             select(DBTransaction).where(DBTransaction.user_email == user_email)
         ).all()
 
-    portrait = portrait_of_month(transactions)
-    patterns = cluster_days(transactions)
+    # Генерируем портрет и паттерны
+    portrait = portrait_of_month(transactions, month=month, year=year)
+    patterns = cluster_days(transactions, month=month, year=year)
 
     return {
         "portrait": portrait,
         "patterns": patterns
     }
+
 
 
 @app.get("/statements")
