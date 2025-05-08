@@ -6,6 +6,14 @@ from auth.utils import decode_token
 from datetime import datetime
 import os, traceback
 from database import engine
+from fastapi import Depends
+from typing import List
+from sqlmodel import Session, select
+from auth.utils import get_current_user
+from database import get_session, Transaction as DBTransaction
+from pydantic import BaseModel
+from datetime import date
+
 
 
 
@@ -136,3 +144,39 @@ def update_transaction_category(
         session.add(tx)
         session.commit()
     return {"msg": "Category updated"}
+
+class TransactionOut(BaseModel):
+    id: int
+    date: date
+    amount: float
+    description: str
+    category: str
+    bank: str
+    isIncome: bool
+
+def parse_date(date_str: str):
+    return datetime.strptime(date_str, "%d.%m.%Y").date()
+
+@router.get("/history", response_model=List[TransactionOut])
+def get_transaction_history(
+    session: Session = Depends(get_session),
+    user: dict = Depends(get_current_user)
+):
+    transactions = session.exec(
+        select(DBTransaction)
+        .where(DBTransaction.user_email == user["email"])
+        .order_by(DBTransaction.date.desc())
+    ).all()
+
+    return [
+        TransactionOut(
+            id=tx.id,
+            date=parse_date(tx.date),  # ← ПАРСИМ строку в datetime.date
+            amount=tx.cost,
+            description=tx.description,
+            category=tx.category,
+            bank=tx.bank,
+            isIncome=tx.cost > 0
+        )
+        for tx in transactions
+    ]

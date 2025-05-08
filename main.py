@@ -5,6 +5,7 @@ from analytics.routes import router as analytics_router
 from transactions.routes import router as transactions_router
 from portrait.routes import router as portrait_router
 from statements.routes import router as statements_router
+from transactions.routes import router as transactions_router
 
 app = FastAPI()
 
