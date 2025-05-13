@@ -6,6 +6,7 @@ from transactions.routes import router as transactions_router
 from portrait.routes import router as portrait_router
 from statements.routes import router as statements_router
 from transactions.routes import router as transactions_router
+from goals.routes import router as goals_router
 
 app = FastAPI()
 
@@ -22,3 +23,5 @@ app.include_router(analytics_router)
 app.include_router(transactions_router, prefix="/transactions")
 app.include_router(portrait_router)
 app.include_router(statements_router)
+app.include_router(goals_router, prefix="/goals", tags=["Goals"])
+
