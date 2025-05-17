@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime, date
 from uuid import uuid4, UUID
 
-# Модель пользователя
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str
@@ -21,7 +20,6 @@ class Transaction(SQLModel, table=True):
     user_email: str
     statement_id: Optional[int] = Field(default=None, foreign_key="statement.id")
 
-# ✅ Новая модель — загруженные выписки
 class Statement(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_email: str
@@ -39,15 +37,12 @@ class FinancialGoal(SQLModel, table=True):
     current_amount: float
     deadline: Optional[date]
 
-# Настройка подключения к SQLite (пока локально)
 DATABASE_URL = "sqlite:///./transactions.db"
 engine = create_engine(DATABASE_URL, echo=False)
 
-# Функция инициализации базы данных (создание таблиц)
 def init_db():
     SQLModel.metadata.create_all(engine)
 
-# Пример использования сессии
 def get_session():
     with Session(engine) as session:
         yield session
