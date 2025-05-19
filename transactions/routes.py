@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Request, Header, Path
 from sqlmodel import Session, select
 from database import Transaction as DBTransaction, Statement as DBStatement
-from transactions.utils import parse_statement, categorize_by_place
+from transactions.utils import parse_statement, categorize_sber, categorize_tbank
 from auth.utils import decode_token
 from datetime import datetime
 import os, traceback
@@ -13,8 +13,6 @@ from auth.utils import get_current_user
 from database import get_session, Transaction as DBTransaction
 from pydantic import BaseModel
 from datetime import date
-
-
 
 
 router = APIRouter()
@@ -43,17 +41,23 @@ async def upload_statement(
         f.write(contents)
 
     try:
-        start, end, txs = parse_statement(temp_path)
+        # ⬇⬇⬇ исправлено
+        start, end, txs = parse_statement(temp_path, bank)
         if not txs:
             return {"period": {"start": start, "end": end}, "transactions": []}
 
-        categorized = categorize_by_place(txs)
+        categorized = txs  # ⬅ больше не вызываем отдельную категоризацию
 
         with Session(engine) as session:
-            start_date = datetime.strptime(start, "%d.%m.%Y").date()
-            end_date = datetime.strptime(end, "%d.%m.%Y").date()
+            if not start or not end:
+                raise HTTPException(400, detail="Не удалось определить период выписки. Проверь формат PDF.")
 
-            # Проверка дубликатов
+            try:
+                start_date = datetime.strptime(start, "%d.%m.%Y").date()
+                end_date = datetime.strptime(end, "%d.%m.%Y").date()
+            except ValueError:
+                raise HTTPException(400, detail="Некорректный формат даты в выписке.")
+
             existing = session.exec(
                 select(DBStatement).where(
                     (DBStatement.user_email == user_email) &
@@ -75,7 +79,6 @@ async def upload_statement(
             session.commit()
             session.refresh(statement)
 
-            # Сохраняем транзакции
             for tx in categorized:
                 tx_obj = DBTransaction(
                     date=tx["date"],
@@ -91,7 +94,6 @@ async def upload_statement(
 
             session.commit()
 
-            # Сборка ответа с id
             transactions = session.exec(
                 select(DBTransaction).where(DBTransaction.statement_id == statement.id)
             ).all()
@@ -154,8 +156,14 @@ class TransactionOut(BaseModel):
     bank: str
     isIncome: bool
 
-def parse_date(date_str: str):
-    return datetime.strptime(date_str, "%d.%m.%Y").date()
+def parse_date(date_str: str) -> datetime.date:
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"⛔ Невозможно распарсить дату: {date_str}")
+
 
 @router.get("/history", response_model=List[TransactionOut])
 def get_transaction_history(

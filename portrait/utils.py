@@ -3,6 +3,7 @@ from calendar import monthrange
 from collections import defaultdict, Counter
 import numpy as np
 from sklearn.cluster import KMeans
+from pydantic import BaseModel
 
 MOOD_BY_CATEGORY = {
     'Кофейни':        ('☕️', 'Беззаботный'),
@@ -14,22 +15,46 @@ MOOD_BY_CATEGORY = {
     'Другие':         ('📊', 'Уравновешенный'),
 }
 
-PORTRAIT_BLACKLIST = {'Переводы'}
+PORTRAIT_BLACKLIST = {'Переводы', 'Пополнение'}
+
+class Transaction(BaseModel):
+    date: str
+    cost: float
+    category: str
+
+def safe_parse_date(date_str: str) -> datetime.date:
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"⛔ Неподдерживаемый формат даты: {date_str}")
 
 def portrait_of_month(transactions, month: int, year: int):
     first_day = date(year, month, 1)
     last_day = first_day.replace(day=monthrange(year, month)[1])
+
+    tx_objects = [Transaction(**tx) if isinstance(tx, dict) else tx for tx in transactions]
 
     months = ["январь", "февраль", "март", "апрель", "май", "июнь",
               "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
     month_name = months[month - 1].capitalize()
 
     month_txs = [
-        tx for tx in transactions
-        if first_day <= datetime.strptime(tx.date, "%d.%m.%Y").date() <= last_day
-        and tx.cost < 0
+        tx for tx in tx_objects
+        if first_day <= safe_parse_date(tx.date) <= last_day
         and tx.category not in PORTRAIT_BLACKLIST
     ]
+
+    print(f"🔍 Портрет за {month}.{year}, транзакций: {len(tx_objects)}")
+
+    for tx in tx_objects:
+        try:
+            parsed_date = safe_parse_date(tx.date)
+            if first_day <= parsed_date <= last_day:
+                print(f"✅ {tx.date} -> ok | {tx.category} | {tx.cost}")
+        except Exception as e:
+            print(f"❌ {tx.date} -> ошибка парсинга: {e}")
 
     if not month_txs:
         return {"status": "no_data", "message": f"⚪️ {month_name} — нет расходов для анализа"}
@@ -64,18 +89,19 @@ def portrait_of_month(transactions, month: int, year: int):
                    f"Топ категории: {', '.join(top3)}. Настроение: {mood}."
     }
 
-
 def cluster_days(transactions, month: int, year: int):
     first_day = date(year, month, 1)
     last_day = (first_day.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
     daily = defaultdict(float)
 
-    for tx in transactions:
+    tx_objects = [Transaction(**tx) if isinstance(tx, dict) else tx for tx in transactions]
+
+    for tx in tx_objects:
         try:
-            tx_date = datetime.strptime(tx.date, "%d.%m.%Y").date()
+            tx_date = safe_parse_date(tx.date)
         except:
             continue
-        if first_day <= tx_date <= last_day and tx.cost < 0:
+        if first_day <= tx_date <= last_day and tx.category not in PORTRAIT_BLACKLIST:
             daily[tx_date] += abs(tx.cost)
 
     if not daily:

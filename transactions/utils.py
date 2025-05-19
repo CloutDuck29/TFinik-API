@@ -1,11 +1,11 @@
 import re, pdfplumber, logging
-from collections import defaultdict
+import datetime
 
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 logging.getLogger("pdfplumber").setLevel(logging.ERROR)
 
-# --- ПАРСИН PDF ---
-def parse_statement(pdf_path):
+# --- ПАРСЕР Т-БАНКА ---
+def parse_tbank_statement(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
@@ -43,23 +43,22 @@ def parse_statement(pdf_path):
                 desc += ' ' + lines[j]
                 j += 1
             amount_value = clean(amt_op_raw)
+            is_income = amount_value > 0
+
             txs.append({
                 'date': date_op,
                 'time': time_op,
-                'amount': amount_value,
+                'amount': amount_value if is_income else -abs(amount_value),  # ✅
                 'description': desc.strip(),
-                'isIncome': amount_value > 0
+                'isIncome': is_income
             })
             i = j
         else:
             i += 1
 
-    print(f"✅ Parsed {len(txs)} transactions")
-    return start, end, txs
+    return start, end, categorize_tbank(txs)
 
-
-# --- КАТЕГОРИЗАЦИЯ ---
-def categorize_by_place(txs):
+def categorize_tbank(txs):
     rules = {
         'Кофейни':            [r'кофе', r'кофейня', r'кофешоп', r'cafe', r'coffee',
                                r'шоколадница', r'кофемания', r'Coffeemania',
@@ -98,9 +97,7 @@ def categorize_by_place(txs):
         'ЖКХ':     [r'zhku', r'жкх', r'kvartplata', r'квартплата', r'dsos', r'коммунал'],
         'Переводы':           [r'перевод'],
     }
-
     regex = {cat: [re.compile(p, re.IGNORECASE) for p in pats] for cat, pats in rules.items()}
-
     for tx in txs:
         tx['category'] = 'Другие'
         for cat, patterns in regex.items():
@@ -108,3 +105,77 @@ def categorize_by_place(txs):
                 tx['category'] = cat
                 break
     return txs
+
+# --- ПАРСЕР СБЕРБАНКА ---
+def parse_sber_statement(pdf_path):
+    with pdfplumber.open(pdf_path) as pdf:
+        full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+
+    # 🔎 Ищем период выписки (дату начала и окончания)
+    m = re.search(r'Итого по операциям с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', full_text)
+    if not m:
+        m = re.search(r'Движение средств за период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', full_text)
+    start, end = m.groups() if m else (None, None)
+
+    lines = full_text.split('\n')
+    operation_lines = [line.strip() for line in lines if re.match(r"\d{2}\.\d{2}\.\d{4}", line.strip())]
+
+    transactions = []
+    for line in operation_lines:
+        match = re.match(r"(\d{2}\.\d{2}\.\d{4})\s+\d{2}:\d{2}\s+\d+\s+(.*?)\s+([+\-]?\d[\d\s\xa0]*,\d{2})", line)
+        if match:
+            date, description, amount = match.groups()
+            amount = float(amount.replace("\xa0", "").replace(" ", "").replace(",", "."))
+            is_income = amount > 0
+
+            transactions.append({
+                "date": datetime.datetime.strptime(date, "%d.%m.%Y").date().isoformat(),
+                "time": None,
+                "amount": amount if is_income else -abs(amount),  # ✅
+                "description": description.strip(),
+                "isIncome": is_income
+            })
+    return start, end, categorize_sber(transactions)
+
+
+def categorize_sber(txs):
+    mapping = {
+        "внесение наличных": "Пополнение",
+        "прочие операции": "Переводы",
+        "перевод на карту": "Переводы",
+        "перевод физическому лицу": "Переводы",
+        "перевод СБП": "Переводы",
+        "оплата по реквизитам": "Переводы",
+        "перевод с карты": "Переводы",
+        "отдых и развлечения": "Развлечения",
+        "транспорт": "Транспорт",
+        "магазин": "Магазины",
+        "кафе": "Кофейни",
+        "ресторан": "Кофейни",
+        "кофейня": "Кофейни",
+        "доставка": "Доставка",
+        "яндекс еда": "Доставка",
+        "delivery": "Доставка",
+        "жку": "ЖКХ",
+    }
+
+    def remap(description: str) -> str:
+        desc = description.lower()
+        for key in mapping:
+            if key in desc:
+                return mapping[key]
+        return "Другие"
+
+    for tx in txs:
+        tx['category'] = remap(tx['description'])
+    return txs
+
+# --- ОБЩАЯ ФУНКЦИЯ ДЛЯ BACKEND ---
+def parse_statement(pdf_path, bank: str):
+    bank = bank.lower()
+    if bank in ("tinkoff", "tbank"):
+        return parse_tbank_statement(pdf_path)
+    elif bank == "sber":
+        return parse_sber_statement(pdf_path)
+    else:
+        raise ValueError(f"❌ Unsupported bank: {bank}")
