@@ -12,10 +12,8 @@ router = APIRouter(prefix="/forecast", tags=["Forecast"])
 class Transaction(BaseModel):
     date: str
     cost: float
-    is_income: bool = Field(..., alias="isIncome")
+    is_income: bool
     category: str
-    class Config:
-        allow_population_by_field_name = True
 
 class ForecastRequest(BaseModel):
     transactions: List[Transaction]
