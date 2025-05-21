@@ -25,7 +25,7 @@ def get_statements(authorization: str = Header(...)):
     return [
         {
             "id": s.id,
-            "bank": s.bank,
+            "bank": s.bank.lower(),
             "date_start": s.date_start.strftime("%d.%m.%Y"),
             "date_end": s.date_end.strftime("%d.%m.%Y"),
             "uploaded_at": s.uploaded_at.isoformat()

@@ -9,6 +9,9 @@ def parse_tbank_statement(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
 
+    if not re.search(r'Т-?банк', text, re.IGNORECASE):
+        raise ValueError("❌ Файл не является выпиской Т-банка")
+
     m = re.search(r'Движение средств за период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', text)
     start, end = m.groups() if m else (None, None)
 
@@ -109,7 +112,22 @@ def categorize_tbank(txs):
 # --- ПАРСЕР СБЕРБАНКА ---
 def parse_sber_statement(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
-        full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+        texts = [page.extract_text() for page in pdf.pages if page.extract_text()]
+        full_text = "\n".join(texts)
+        lowered_full = full_text.lower()
+        first_page = texts[0].lower() if texts else ""
+
+    # 🔥 1. Запрещаем чужие банки
+    if any(foreign in first_page for foreign in ["тинькофф", "tinkoff", "т-банк", "t-bank"]):
+        raise ValueError("❌ Это не выписка Сбербанка (обнаружен другой банк в заголовке)")
+
+    # ✅ 2. Гибкая проверка признаков Сбера — в пределах первых строк
+    sber_ok = any(p in first_page for p in [
+        "сбербанк", "выписка по счету", "дебетовая карта", "итого по операциям"
+    ])
+    if not sber_ok:
+        raise ValueError("❌ Это не выписка Сбербанка (не найдено характерных признаков)")
+
 
     # 🔎 Ищем период выписки (дату начала и окончания)
     m = re.search(r'Итого по операциям с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', full_text)
