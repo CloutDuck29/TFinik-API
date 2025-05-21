@@ -41,12 +41,9 @@ async def upload_statement(
         f.write(contents)
 
     try:
-        # ⬇⬇⬇ исправлено
         start, end, txs = parse_statement(temp_path, bank)
         if not txs:
             return {"period": {"start": start, "end": end}, "transactions": []}
-
-        categorized = txs  # ⬅ больше не вызываем отдельную категоризацию
 
         with Session(engine) as session:
             if not start or not end:
@@ -58,7 +55,8 @@ async def upload_statement(
             except ValueError:
                 raise HTTPException(400, detail="Некорректный формат даты в выписке.")
 
-            existing = session.exec(
+            # --- Проверка: уже есть выписка с этим периодом?
+            existing_statement = session.exec(
                 select(DBStatement).where(
                     (DBStatement.user_email == user_email) &
                     (DBStatement.bank == bank) &
@@ -66,9 +64,26 @@ async def upload_statement(
                     (DBStatement.date_end == end_date)
                 )
             ).first()
-            if existing:
-                raise HTTPException(400, "Такая выписка уже загружена.")
 
+            if existing_statement:
+                duplicate_count = 0
+                for tx in txs:
+                    exists = session.exec(
+                        select(DBTransaction).where(
+                            (DBTransaction.user_email == user_email) &
+                            (DBTransaction.date == tx["date"]) &
+                            (DBTransaction.cost == tx["amount"]) &
+                            (DBTransaction.description == tx["description"]) &
+                            (DBTransaction.bank == bank)
+                        )
+                    ).first()
+                    if exists:
+                        duplicate_count += 1
+
+                if duplicate_count == len(txs):
+                    raise HTTPException(400, detail="Такая выписка уже загружена.")
+
+            # --- Создание новой записи о выписке
             statement = DBStatement(
                 user_email=user_email,
                 bank=bank,
@@ -79,7 +94,21 @@ async def upload_statement(
             session.commit()
             session.refresh(statement)
 
-            for tx in categorized:
+            inserted_transactions = []
+            for tx in txs:
+                exists = session.exec(
+                    select(DBTransaction).where(
+                        (DBTransaction.user_email == user_email) &
+                        (DBTransaction.date == tx["date"]) &
+                        (DBTransaction.cost == tx["amount"]) &
+                        (DBTransaction.description == tx["description"]) &
+                        (DBTransaction.bank == bank)
+                    )
+                ).first()
+
+                if exists:
+                    continue
+
                 tx_obj = DBTransaction(
                     date=tx["date"],
                     time=tx.get("time"),
@@ -91,12 +120,9 @@ async def upload_statement(
                     statement_id=statement.id
                 )
                 session.add(tx_obj)
+                inserted_transactions.append(tx_obj)
 
             session.commit()
-
-            transactions = session.exec(
-                select(DBTransaction).where(DBTransaction.statement_id == statement.id)
-            ).all()
 
             response_transactions = [{
                 "id": tx.id,
@@ -107,7 +133,7 @@ async def upload_statement(
                 "description": tx.description,
                 "category": tx.category,
                 "bank": tx.bank
-            } for tx in transactions]
+            } for tx in inserted_transactions]
 
         return {
             "period": {"start": start, "end": end},
@@ -121,7 +147,6 @@ async def upload_statement(
         raise HTTPException(500, str(e))
     finally:
         os.remove(temp_path)
-
 
 
 @router.patch("/{transaction_id}")
