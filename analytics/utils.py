@@ -159,6 +159,8 @@ def generate_income_stats(transactions):
                     })
     return result
 
+import random
+
 def generate_monthly_advice(transactions):
     first_this_month = date(2025, 4, 1)
     today = date(2025, 4, 30)
@@ -214,6 +216,10 @@ def generate_monthly_advice(transactions):
         change_pct = ((amt_this - amt_last) / amt_last * 100) if amt_last > 0 else 100
         share_pct = amt_this / total_this * 100 if total_this > 0 else 0
 
+        # 🔥 Фильтрация незначительных категорий
+        if share_pct < 1:
+            continue
+
         if change_pct > 25 or share_pct > 30:
             phrases = [
                 f"Это {share_pct:.0f}% всех расходов — подумайте, нужно ли это.",
@@ -224,7 +230,7 @@ def generate_monthly_advice(transactions):
             emoji = EMOJI_BY_CATEGORY.get(cat, "💸")
             advice_text = (
                 f"{emoji} Вы тратите на '{cat}' на {change_pct:.0f}% больше, чем в прошлом месяце. "
-                + phrases[0]
+                + random.choice(phrases)
             )
             advice_list.append({
                 "category": cat,
@@ -235,3 +241,4 @@ def generate_monthly_advice(transactions):
 
     advice_list.sort(key=lambda x: x["share_percent"], reverse=True)
     return advice_list
+
