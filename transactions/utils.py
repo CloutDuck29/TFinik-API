@@ -142,14 +142,17 @@ def parse_sber_statement(pdf_path):
     for line in operation_lines:
         match = re.match(r"(\d{2}\.\d{2}\.\d{4})\s+\d{2}:\d{2}\s+\d+\s+(.*?)\s+([+\-]?\d[\d\s\xa0]*,\d{2})", line)
         if match:
-            date, description, amount = match.groups()
-            amount = float(amount.replace("\xa0", "").replace(" ", "").replace(",", "."))
-            is_income = amount > 0
+            date, description, raw_amount = match.groups()
+            clean_str = raw_amount.replace("\xa0", "").replace(" ", "").replace(",", ".")
+            amount_value = float(clean_str.lstrip("+-"))  # убираем знак для получения абсолютного значения
+
+            is_income = raw_amount.strip().startswith("+")
+            signed_amount = amount_value if is_income else -amount_value
 
             transactions.append({
                 "date": datetime.datetime.strptime(date, "%d.%m.%Y").date().isoformat(),
                 "time": None,
-                "amount": amount if is_income else -abs(amount),  # ✅
+                "amount": signed_amount,
                 "description": description.strip(),
                 "isIncome": is_income
             })
