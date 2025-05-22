@@ -76,16 +76,27 @@ def generate_monthly_stats(transactions):
         if tx.cost > 0 or tx.category == "Пополнение":
             continue
 
-        month_number = tx_date.month
-        monthly_data[month_number][tx.category].append({
+        month_key = tx_date.strftime("%Y-%m")  # ключ для правильного хронологического порядка
+        monthly_data[month_key][tx.category].append({
             "amount": abs(tx.cost),
             "description": tx.description
         })
 
+    # Последние 6 месяцев в нужном порядке
+    month_keys_ordered = [
+        (now - relativedelta(months=i)).strftime("%Y-%m")
+        for i in reversed(range(6))
+    ]
+
     result = []
-    for month_number in sorted(monthly_data.keys()):
-        month_label = MONTHS_RU[month_number]
-        for cat, tx_list in monthly_data[month_number].items():
+    for month_key in month_keys_ordered:
+        if month_key not in monthly_data:
+            continue
+
+        year, month = map(int, month_key.split("-"))
+        month_label = MONTHS_RU[month]
+
+        for cat, tx_list in monthly_data[month_key].items():
             if cat == "Другие":
                 for tx in tx_list:
                     result.append({
@@ -101,7 +112,9 @@ def generate_monthly_stats(transactions):
                     "category": cat,
                     "amount": round(total, 2)
                 })
+
     return result
+
 
 
 def generate_income_stats(transactions):
@@ -123,16 +136,27 @@ def generate_income_stats(transactions):
         if tx.cost <= 0 or tx.category != "Пополнение":
             continue
 
-        month = tx_date.month
-        monthly_data[month][tx.category].append({
+        month_key = tx_date.strftime("%Y-%m")
+        monthly_data[month_key][tx.category].append({
             "amount": round(tx.cost, 2),
             "description": tx.description
         })
 
+    # Список последних 6 месяцев в хронологическом порядке
+    month_keys_ordered = [
+        (now - relativedelta(months=i)).strftime("%Y-%m")
+        for i in reversed(range(6))
+    ]
+
     result = []
-    for month_num in sorted(monthly_data.keys()):
-        month_label = MONTHS_RU[month_num]
-        for cat, tx_list in monthly_data[month_num].items():
+    for month_key in month_keys_ordered:
+        if month_key not in monthly_data:
+            continue
+
+        year, month = map(int, month_key.split("-"))
+        month_label = MONTHS_RU[month]
+
+        for cat, tx_list in monthly_data[month_key].items():
             for tx in tx_list:
                 result.append({
                     "month": month_label,
@@ -140,6 +164,7 @@ def generate_income_stats(transactions):
                     "amount": tx["amount"],
                     "description": tx["description"]
                 })
+
     return result
 
 

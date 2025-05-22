@@ -161,16 +161,26 @@ def update_transaction_category(
         raise HTTPException(400, "Category required")
 
     with Session(engine) as session:
-
         tx = session.get(DBTransaction, transaction_id)
         if not tx:
             raise HTTPException(404, "Transaction not found")
         if tx.user_email != user_email:
             raise HTTPException(403, "Forbidden")
+
+        # ✅ Обновляем категорию
         tx.category = new_category
+
+        # ✅ Автообработка суммы при смене категории
+        if new_category == "Пополнение" and tx.cost < 0:
+            tx.cost = abs(tx.cost)
+        # ❗️(Опционально) для прочих категорий — делаем сумму отрицательной, если она положительная
+        elif new_category != "Пополнение" and tx.cost > 0:
+            tx.cost = -abs(tx.cost)
+
         session.add(tx)
         session.commit()
-    return {"msg": "Category updated"}
+
+    return {"msg": "Category and amount updated accordingly"}
 
 class TransactionOut(BaseModel):
     id: int
