@@ -59,18 +59,9 @@ def generate_category_stats(transactions):
 
 def generate_monthly_stats(transactions):
     now = datetime.utcnow()
-    current_year = now.year
-    current_month = now.month
-
-    if current_month <= 6:
-        start_month = 1
-        end_month = current_month
-    else:
-        start_month = current_month
-        end_month = 12
-
-    start_cutoff = datetime(current_year, start_month, 1)
-    end_cutoff = datetime(current_year, end_month, 28) + relativedelta(day=31)
+    six_months_ago = now - relativedelta(months=5)
+    start_cutoff = datetime(six_months_ago.year, six_months_ago.month, 1)
+    end_cutoff = datetime(now.year, now.month, 28) + relativedelta(day=31)
 
     monthly_data = defaultdict(lambda: defaultdict(list))
 
@@ -92,39 +83,32 @@ def generate_monthly_stats(transactions):
         })
 
     result = []
-    for month_number in range(start_month, end_month + 1):
-        if month_number in monthly_data:
-            month_label = MONTHS_RU[month_number]
-            for cat, tx_list in monthly_data[month_number].items():
-                if cat == "Другие":
-                    for tx in tx_list:
-                        result.append({
-                            "month": month_label,
-                            "category": cat,
-                            "amount": round(tx["amount"], 2),
-                            "description": tx["description"]
-                        })
-                else:
-                    total = sum(tx["amount"] for tx in tx_list)
+    for month_number in sorted(monthly_data.keys()):
+        month_label = MONTHS_RU[month_number]
+        for cat, tx_list in monthly_data[month_number].items():
+            if cat == "Другие":
+                for tx in tx_list:
                     result.append({
                         "month": month_label,
                         "category": cat,
-                        "amount": round(total, 2)
+                        "amount": round(tx["amount"], 2),
+                        "description": tx["description"]
                     })
+            else:
+                total = sum(tx["amount"] for tx in tx_list)
+                result.append({
+                    "month": month_label,
+                    "category": cat,
+                    "amount": round(total, 2)
+                })
     return result
+
 
 def generate_income_stats(transactions):
     now = datetime.utcnow()
-    current_year = now.year
-    current_month = now.month
-
-    if current_month <= 6:
-        month_range = range(1, 7)
-    else:
-        month_range = range(7, 13)
-
-    start_cutoff = datetime(current_year, month_range.start, 1)
-    end_cutoff = datetime(current_year, month_range.stop - 1, 28) + relativedelta(day=31)
+    six_months_ago = now - relativedelta(months=5)
+    start_cutoff = datetime(six_months_ago.year, six_months_ago.month, 1)
+    end_cutoff = datetime(now.year, now.month, 28) + relativedelta(day=31)
 
     monthly_data = defaultdict(lambda: defaultdict(list))
 
@@ -146,18 +130,18 @@ def generate_income_stats(transactions):
         })
 
     result = []
-    for month_num in month_range:
-        if month_num in monthly_data:
-            month_label = MONTHS_RU[month_num]
-            for cat, tx_list in monthly_data[month_num].items():
-                for tx in tx_list:
-                    result.append({
-                        "month": month_label,
-                        "category": cat,
-                        "amount": tx["amount"],
-                        "description": tx["description"]
-                    })
+    for month_num in sorted(monthly_data.keys()):
+        month_label = MONTHS_RU[month_num]
+        for cat, tx_list in monthly_data[month_num].items():
+            for tx in tx_list:
+                result.append({
+                    "month": month_label,
+                    "category": cat,
+                    "amount": tx["amount"],
+                    "description": tx["description"]
+                })
     return result
+
 
 import random
 
