@@ -38,7 +38,7 @@ def get_forecast(req: ForecastRequest):
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df = df.dropna(subset=['date'])
         df = df[~df['is_income']]
-        df = df[~df['category'].isin(["Переводы", "Пополнения"])]
+        df = df[~df['category'].isin(["Переводы", "Пополнения", "Пополнение"])]
 
         latest_date = df['date'].max()
         one_year_ago = latest_date - pd.DateOffset(months=12)
@@ -94,7 +94,7 @@ def forecast_categories(
         df = df.dropna(subset=['date'])
         df = df[~df['is_income']]
         df = df[df['cost'] < 0]  # расходы отрицательны
-        df = df[~df['category'].isin(["Переводы", "Пополнения"])]
+        df = df[~df['category'].isin(["Переводы", "Пополнения", "Пополнение"])]
 
         start_date = target_date - pd.DateOffset(months=12)
         df = df[(df['date'] >= start_date) & (df['date'] < target_date)]
