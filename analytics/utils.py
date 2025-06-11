@@ -76,13 +76,12 @@ def generate_monthly_stats(transactions):
         if tx.cost > 0 or tx.category == "Пополнение":
             continue
 
-        month_key = tx_date.strftime("%Y-%m")  # ключ для правильного хронологического порядка
+        month_key = tx_date.strftime("%Y-%m")
         monthly_data[month_key][tx.category].append({
             "amount": abs(tx.cost),
             "description": tx.description
         })
 
-    # Последние 6 месяцев в нужном порядке
     month_keys_ordered = [
         (now - relativedelta(months=i)).strftime("%Y-%m")
         for i in reversed(range(6))
@@ -142,7 +141,6 @@ def generate_income_stats(transactions):
             "description": tx.description
         })
 
-    # Список последних 6 месяцев в хронологическом порядке
     month_keys_ordered = [
         (now - relativedelta(months=i)).strftime("%Y-%m")
         for i in reversed(range(6))
@@ -171,10 +169,13 @@ def generate_income_stats(transactions):
 import random
 
 def generate_monthly_advice(transactions):
-    first_this_month = date(2025, 4, 1)
-    today = date(2025, 4, 30)
-    first_last_month = date(2025, 3, 1)
-    last_last_month = date(2025, 3, 31)
+    today = date.today()
+
+    first_this_month = today.replace(day=1)
+    last_this_month = (first_this_month + relativedelta(months=1)) - timedelta(days=1)
+
+    first_last_month = first_this_month - relativedelta(months=1)
+    last_last_month = first_this_month - timedelta(days=1)
 
     EMOJI_BY_CATEGORY = {
         "Кофейни": "☕️",
@@ -196,7 +197,7 @@ def generate_monthly_advice(transactions):
             continue
 
         period = None
-        if first_this_month <= tx_date <= today:
+        if first_this_month <= tx_date <= last_this_month:
             period = 'this'
         elif first_last_month <= tx_date <= last_last_month:
             period = 'last'
@@ -225,7 +226,6 @@ def generate_monthly_advice(transactions):
         change_pct = ((amt_this - amt_last) / amt_last * 100) if amt_last > 0 else 100
         share_pct = amt_this / total_this * 100 if total_this > 0 else 0
 
-        # 🔥 Фильтрация незначительных категорий
         if share_pct < 1:
             continue
 

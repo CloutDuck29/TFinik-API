@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.post("/register", status_code=201)
 def register(c: Creds):
-    with Session(engine) as session:  # ✅ engine передан
+    with Session(engine) as session:
         existing = session.exec(select(DBUser).where(DBUser.email == c.email)).first()
         if existing:
             raise HTTPException(400, "User exists")
@@ -24,7 +24,7 @@ def register(c: Creds):
 
 @router.post("/login", response_model=TokenPair)
 def login(c: Creds):
-    with Session(engine) as session:  # ✅ engine передан
+    with Session(engine) as session:
         user = session.exec(select(DBUser).where(DBUser.email == c.email)).first()
         if not user or not bcrypt.verify(c.password, user.hashed_password):
             raise HTTPException(401, "Invalid credentials")

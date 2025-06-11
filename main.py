@@ -18,7 +18,6 @@ from database import init_db
 def on_startup():
     init_db()
 
-# Регистрация роутеров
 app.include_router(auth_router, prefix="/auth")
 app.include_router(analytics_router)
 app.include_router(transactions_router, prefix="/transactions")

@@ -8,28 +8,23 @@ from uuid import UUID
 
 router = APIRouter()
 
-# 🔹 Модель для создания цели
 class GoalCreate(BaseModel):
     name: str
     target_amount: float
     deadline: date | None = None
 
-# 🔹 Модель для обновления цели
 class GoalUpdate(BaseModel):
     name: str | None = None
     target_amount: float | None = None
     deadline: date | None = None
 
-# 🔹 Модель заноса суммы
 class AddAmount(BaseModel):
     amount: float
 
-# 🔹 Получение всех целей пользователя
 @router.get("/", response_model=list[FinancialGoal])
 def get_goals(session: Session = Depends(get_session), user=Depends(get_current_user)):
     return session.exec(select(FinancialGoal).where(FinancialGoal.user_email == user["email"])).all()
 
-# 🔹 Создание новой цели
 @router.post("/")
 def create_goal(data: GoalCreate, session: Session = Depends(get_session), user=Depends(get_current_user)):
     goal = FinancialGoal(
@@ -44,7 +39,6 @@ def create_goal(data: GoalCreate, session: Session = Depends(get_session), user=
     session.refresh(goal)
     return goal
 
-# 🔹 Обновление цели по id
 @router.patch("/{goal_id}")
 def update_goal(goal_id: int, data: GoalUpdate, session: Session = Depends(get_session), user=Depends(get_current_user)):
     goal = session.get(FinancialGoal, goal_id)
@@ -62,7 +56,6 @@ def update_goal(goal_id: int, data: GoalUpdate, session: Session = Depends(get_s
     session.commit()
     return {"msg": "Цель обновлена"}
 
-# 🔹 Занесение суммы к цели
 @router.post("/{goal_id}/add")
 def add_to_goal(goal_id: int, data: AddAmount, session: Session = Depends(get_session), user=Depends(get_current_user)):
     goal = session.get(FinancialGoal, goal_id)

@@ -214,7 +214,7 @@ def get_transaction_history(
     return [
         TransactionOut(
             id=tx.id,
-            date=parse_date(tx.date),  # ← ПАРСИМ строку в datetime.date
+            date=parse_date(tx.date),
             amount=tx.cost,
             description=tx.description,
             category=tx.category,

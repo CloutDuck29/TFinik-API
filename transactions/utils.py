@@ -117,11 +117,9 @@ def parse_sber_statement(pdf_path):
         lowered_full = full_text.lower()
         first_page = texts[0].lower() if texts else ""
 
-    # 🔥 1. Запрещаем чужие банки
     if any(foreign in first_page for foreign in ["тинькофф", "tinkoff", "т-банк", "t-bank"]):
         raise ValueError("❌ Это не выписка Сбербанка (обнаружен другой банк в заголовке)")
 
-    # ✅ 2. Гибкая проверка признаков Сбера — в пределах первых строк
     sber_ok = any(p in first_page for p in [
         "сбербанк", "выписка по счету", "дебетовая карта", "итого по операциям"
     ])
@@ -129,7 +127,6 @@ def parse_sber_statement(pdf_path):
         raise ValueError("❌ Это не выписка Сбербанка (не найдено характерных признаков)")
 
 
-    # 🔎 Ищем период выписки (дату начала и окончания)
     m = re.search(r'Итого по операциям с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', full_text)
     if not m:
         m = re.search(r'Движение средств за период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})', full_text)
@@ -144,7 +141,7 @@ def parse_sber_statement(pdf_path):
         if match:
             date, description, raw_amount = match.groups()
             clean_str = raw_amount.replace("\xa0", "").replace(" ", "").replace(",", ".")
-            amount_value = float(clean_str.lstrip("+-"))  # убираем знак для получения абсолютного значения
+            amount_value = float(clean_str.lstrip("+-"))
 
             is_income = raw_amount.strip().startswith("+")
             signed_amount = amount_value if is_income else -amount_value
@@ -191,7 +188,6 @@ def categorize_sber(txs):
         tx['category'] = remap(tx['description'])
     return txs
 
-# --- ОБЩАЯ ФУНКЦИЯ ДЛЯ BACKEND ---
 def parse_statement(pdf_path, bank: str):
     bank = bank.lower()
     if bank in ("tinkoff", "tbank"):
